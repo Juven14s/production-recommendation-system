@@ -1,0 +1,47 @@
+name: Roll back model image
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Previously published immutable model version
+        required: true
+        type: string
+      environment:
+        description: Protected GitHub Environment to roll back
+        required: true
+        default: production
+        type: choice
+        options: [staging, production]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify and restore immutable image
+        env:
+          VERSION: ${{ inputs.version }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+        shell: bash
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker pull "$image:model-$VERSION"
+          docker run --detach --rm --name rollback-smoke --publish 18000:8000 "$image:model-$VERSION"
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:18000/health; then break; fi
+            if [[ "$attempt" == 30 ]]; then docker logs rollback-smoke; exit 1; fi
+            sleep 2
+          done
+          docker stop rollback-smoke
+          docker tag "$image:model-$VERSION" "$image:$TARGET_ENVIRONMENT"
+          docker push "$image:$TARGET_ENVIRONMENT"

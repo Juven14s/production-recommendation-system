@@ -1,0 +1,32 @@
+project:
+  name: production-recommendation-system
+  random_seed: 42
+
+data:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  positive_rating_threshold: 4.0
+
+evaluation:
+  k_values: [5, 10, 20]
+
+item_knn:
+  neighbors_per_item: 100
+  shrinkage: 10.0
+
+bpr:
+  embedding_dim: 64
+  epochs: 15
+  batch_size: 4096
+  learning_rate: 0.01
+  regularization: 0.0001
+
+retrieval:
+  candidate_k_values: [50, 100, 200]
+  search_batch_size: 256
+
+ranking:
+  candidate_count: 200
+  n_estimators: 300
+  learning_rate: 0.05
+  num_leaves: 31

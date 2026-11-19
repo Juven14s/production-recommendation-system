@@ -1,0 +1,76 @@
+name: Promote model image
+
+on:
+  workflow_dispatch:
+    inputs:
+      training_run_id:
+        description: Successful Retrain workflow run ID
+        required: true
+        type: string
+      version:
+        description: Model bundle version produced by that run
+        required: true
+        type: string
+      environment:
+        description: Protected GitHub Environment to deploy
+        required: true
+        default: staging
+        type: choice
+        options: [staging, production]
+
+permissions:
+  contents: read
+  actions: read
+  packages: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install project
+        run: python -m pip install --disable-pip-version-check -e ".[dev]"
+      - uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.training_run_id }}
+          name: model-bundle-${{ inputs.version }}
+          path: release_bundle
+      - name: Validate approved bundle
+        env:
+          EXPECTED_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          mle-validate-bundle release_bundle
+          actual="$(python -c 'import json; print(json.load(open("release_bundle/manifest.json"))["version"])')"
+          [[ "$actual" == "$EXPECTED_VERSION" ]]
+          python -m mle_recsys.mlops.release_context release_bundle release_registry.json
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build, smoke-test and publish
+        env:
+          VERSION: ${{ inputs.version }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+        shell: bash
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker build --file Dockerfile.release --tag "$image:model-$VERSION" .
+          docker run --detach --rm --name recommender-smoke --publish 18000:8000 "$image:model-$VERSION"
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:18000/health; then break; fi
+            if [[ "$attempt" == 30 ]]; then docker logs recommender-smoke; exit 1; fi
+            sleep 2
+          done
+          docker stop recommender-smoke
+          docker tag "$image:model-$VERSION" "$image:$TARGET_ENVIRONMENT"
+          docker push "$image:model-$VERSION"
+          docker push "$image:$TARGET_ENVIRONMENT"

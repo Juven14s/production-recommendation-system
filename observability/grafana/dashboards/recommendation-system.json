@@ -1,0 +1,74 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Request rate",
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+      "targets": [{"expr": "sum(rate(recsys_http_requests_total[5m]))", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "API p95 latency",
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(recsys_http_request_duration_seconds_bucket[5m])) by (le))", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "5xx error rate",
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
+      "fieldConfig": {"defaults": {"unit": "percentunit"}},
+      "targets": [{"expr": "sum(rate(recsys_http_requests_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(recsys_http_requests_total[5m])), 0.001)", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Cache hit rate",
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 0},
+      "fieldConfig": {"defaults": {"unit": "percentunit"}},
+      "targets": [{"expr": "sum(rate(recsys_cache_events_total{result=\"hit\"}[5m])) / clamp_min(sum(rate(recsys_cache_events_total[5m])), 0.001)", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests by endpoint and status",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 5},
+      "targets": [{"expr": "sum(rate(recsys_http_requests_total[5m])) by (endpoint, status)", "legendFormat": "{{endpoint}} {{status}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Inference stage p95",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 5},
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(recsys_engine_stage_duration_seconds_bucket[5m])) by (le, stage))", "legendFormat": "{{stage}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Personalized vs cold start",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 13},
+      "targets": [{"expr": "sum(rate(recsys_recommendation_requests_total[5m])) by (mode)", "legendFormat": "{{mode}}", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Feature age",
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 13},
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "targets": [{"expr": "recsys_feature_age_seconds", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Ranking score p50",
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 13},
+      "targets": [{"expr": "histogram_quantile(0.5, sum(rate(recsys_ranking_score_bucket[5m])) by (le))", "refId": "A"}]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 41,
+  "tags": ["recommendation", "mlops"],
+  "templating": {"list": []},
+  "time": {"from": "now-30m", "to": "now"},
+  "title": "Production Recommendation System",
+  "uid": "mle-recommender",
+  "version": 1
+}

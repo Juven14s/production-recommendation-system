@@ -1,0 +1,114 @@
+services:
+  api:
+    build: .
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      TRAIN_PATH: /app/data/processed/ml-1m/splits/train.parquet
+      MOVIES_PATH: /app/data/processed/ml-1m/movies.parquet
+      BPR_DIR: /app/artifacts/models/bpr
+      FAISS_DIR: /app/artifacts/retrieval/faiss
+      RANKER_DIR: /app/artifacts/models/ranker
+      MODEL_REGISTRY_ROOT: /app/artifacts/model_registry
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./artifacts:/app/artifacts:ro
+      - ./data/processed:/app/data/processed:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7.4-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - redis-data:/data
+
+  prometheus:
+    image: prom/prometheus:v3.13.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - api
+
+  grafana:
+    image: grafana/grafana:13.2.1
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.18.0
+    command:
+      - mlflow
+      - server
+      - --backend-store-uri
+      - sqlite:////mlflow/mlflow.db
+      - --default-artifact-root
+      - /mlflow/artifacts
+      - --serve-artifacts
+      - --artifacts-destination
+      - /mlflow/artifacts
+      - --host
+      - 0.0.0.0
+      - --port
+      - "5000"
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./artifacts/mlflow:/mlflow
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:5000/health')
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  retrainer:
+    profiles: ["training"]
+    build: .
+    command:
+      - mle-retrain
+      - --split-dir
+      - /app/data/processed/ml-1m/splits
+      - --movies
+      - /app/data/processed/ml-1m/movies.parquet
+      - --registry-root
+      - /app/artifacts/model_registry
+      - --tracking-uri
+      - http://mlflow:5000
+    environment:
+      MLFLOW_DISABLE_AGENT_HINT: "1"
+    volumes:
+      - ./artifacts:/app/artifacts
+      - ./data/processed:/app/data/processed:ro
+    depends_on:
+      mlflow:
+        condition: service_healthy
+
+volumes:
+  redis-data:
+  prometheus-data:
+  grafana-data:
