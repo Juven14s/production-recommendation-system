@@ -1,256 +1,285 @@
 # Production Recommendation System
 
-Système de recommandation de films en deux étapes : génération rapide de candidats,
-puis ranking personnalisé. Le projet part de MovieLens et évoluera vers un service
-FastAPI observable, versionné et réentraînable.
+[![CI](https://github.com/Juven14s/production-recommendation-system/actions/workflows/ci.yml/badge.svg)](https://github.com/Juven14s/production-recommendation-system/actions/workflows/ci.yml)
+[![Container](https://github.com/Juven14s/production-recommendation-system/actions/workflows/docker.yml/badge.svg)](https://github.com/Juven14s/production-recommendation-system/actions/workflows/docker.yml)
+[![Retrain](https://github.com/Juven14s/production-recommendation-system/actions/workflows/retrain.yml/badge.svg)](https://github.com/Juven14s/production-recommendation-system/actions/workflows/retrain.yml)
 
-## État actuel
+Moteur de recommandation de films en deux étapes, conçu comme une étude de cas
+Machine Learning Engineering complète : données brutes, entraînement reproductible,
+retrieval FAISS, ranking LightGBM, API faible latence, observabilité et promotion
+contrôlée jusqu'en production.
 
-Le premier incrément couvre :
+> **Statut : production-ready V1.** Le champion `20261119T182524Z-150b09` a passé les
+> quality gates, la validation d'intégrité, le smoke test Docker, puis les promotions
+> `staging` et `production`.
 
-- l'ingestion de MovieLens au format CSV (20M/25M/32M) ou DAT (1M) ;
-- la normalisation des colonnes et des types ;
-- la validation du contrat de données ;
-- l'écriture de tables Parquet ;
-- la production d'un rapport JSON de qualité ;
-- des tests unitaires et une CI minimale.
+## Résultats du champion
 
-Le deuxième incrément ajoute :
+Mesures issues du premier [réentraînement GitHub Actions](https://github.com/Juven14s/production-recommendation-system/actions/runs/44587207119),
+sur MovieLens 1M avec split temporel leave-two-out et seed `42`.
 
-- un split temporel leave-two-out par utilisateur ;
-- une définition explicite des interactions positives ;
-- une baseline de popularité qui exclut les films déjà vus ;
-- Recall@K, NDCG@K et couverture du catalogue sur la validation.
+| Indicateur | Résultat | Rôle |
+|---|---:|---|
+| Recall@10 | **0,0767** | pertinence des 10 recommandations finales |
+| NDCG@10 | **0,0365** | qualité de l'ordre des recommandations |
+| Couverture catalogue@10 | **46,07 %** | diversité des films exposés |
+| Candidate Recall@200 | **53,31 %** | efficacité de la génération FAISS |
+| Latence retrieval p95 | **0,088 ms** | retrieval offline, hors réseau et ranking |
+| Utilisateurs modélisés | **6 038** | utilisateurs avec historique exploitable |
+| Films indexés | **3 525** | catalogue présent dans les interactions positives |
 
-Le troisième incrément ajoute un filtrage collaboratif Item-KNN implicite avec
-similarité cosinus, shrinkage, voisinage sparse et fallback de popularité.
+Les quatre gates de promotion sont passées :
 
-Le quatrième incrément ajoute une factorisation BPR en PyTorch et produit des
-embeddings NumPy portables, prêts à être indexés dans FAISS.
+| Gate | Seuil | Champion | État |
+|---|---:|---:|:---:|
+| Recall@10 | ≥ 0,070 | 0,0767 | ✅ |
+| NDCG@10 | ≥ 0,035 | 0,0365 | ✅ |
+| Couverture@10 | ≥ 40 % | 46,07 % | ✅ |
+| Candidate Recall@200 | ≥ 50 % | 53,31 % | ✅ |
 
-Le cinquième incrément construit un index FAISS exact, conserve le biais du modèle
-BPR dans le produit scalaire, mesure le rappel des candidats et la latence p95.
+## Architecture
 
-Le sixième incrément ajoute un ranker LightGBM LambdaRank avec génération de
-données d'apprentissage sans fuite temporelle et features online-compatible.
+```mermaid
+flowchart LR
+    subgraph Offline[Pipeline offline]
+        ML[MovieLens] --> ING[Ingestion + contrats]
+        ING --> SPLIT[Split temporel]
+        SPLIT --> BPR[Embeddings BPR\nPyTorch]
+        BPR --> IDX[Index FAISS]
+        SPLIT --> LGBM[Ranker LambdaRank\nLightGBM]
+        IDX --> LGBM
+        LGBM --> GATES[Évaluation +\nquality gates]
+        GATES --> MLF[MLflow + registre]
+        MLF --> BUNDLE[Bundle immuable]
+    end
 
-Le septième incrément sert le pipeline complet avec FastAPI, version de modèle,
-cache Redis avec fallback mémoire, cold start et conteneurs Docker Compose.
+    subgraph Online[Serving online]
+        CLIENT[Client] --> API[FastAPI]
+        API <--> CACHE[Redis]
+        API --> RET[Candidate retrieval\nFAISS top 200]
+        RET --> FEAT[Features online]
+        FEAT --> RANK[Ranking LightGBM]
+        RANK --> TOPK[Top K]
+        TOPK --> API
+    end
 
-Le huitième incrément ajoute l'observabilité Prometheus, les alertes de latence et
-d'erreur, ainsi qu'un dashboard Grafana provisionné automatiquement.
+    BUNDLE --> API
+    API --> PROM[Prometheus]
+    PROM --> GRAF[Grafana + alertes]
+    GHA[GitHub Actions] -. réentraînement / promotion .-> BUNDLE
+```
 
-Le neuvième incrément ajoute MLflow, les bundles autonomes, les quality gates,
-l'alias `champion` et un rollback atomique et auditable.
+### Pourquoi deux étapes ?
 
-Le dixième incrément ajoute la CI/CD GitHub Actions : qualité et packaging,
-construction GHCR, réentraînement planifié, validation d'intégrité du bundle,
-promotion protégée vers staging/production et rollback d'une image immuable.
+1. **Candidate retrieval** réduit rapidement le catalogue à 200 films avec les
+   embeddings BPR et un index FAISS inner-product.
+2. **Ranking** calcule des features utilisateur/film et applique LightGBM LambdaRank
+   pour ordonner finement les candidats.
 
-## Démarrage
+Cette séparation permet d'augmenter le catalogue sans faire scorer chaque film par le
+modèle le plus coûteux à chaque requête.
 
-Prérequis : Python 3.11 ou 3.12.
+## Choix MLE importants
+
+- **Évaluation temporelle** : les deux dernières interactions positives de chaque
+  utilisateur sont réservées à la validation et au test.
+- **Prévention des fuites** : le dataset du ranker est construit avec un retriever
+  interne entraîné uniquement sur son historique autorisé.
+- **Cold start** : un utilisateur inconnu reçoit un fallback de popularité déterministe.
+- **Bundle autonome** : données de référence, embeddings, index, ranker, métriques,
+  empreintes SHA-256 et manifeste sont versionnés ensemble.
+- **Promotion fail-closed** : un bundle incomplet, altéré ou sous les seuils ne peut pas
+  devenir champion.
+- **Image d'inférence allégée** : PyTorch, CUDA et MLflow restent hors de l'image de
+  serving ; les embeddings sont chargés depuis NumPy.
+- **Rollback immuable** : `production` pointe vers une image `model-<version>` déjà
+  construite et testée.
+
+## Stack
+
+| Domaine | Technologies |
+|---|---|
+| Data | Python, Pandas, PyArrow, SQL-ready Parquet |
+| Modèles | PyTorch BPR, Item-KNN, LightGBM LambdaRank |
+| Retrieval | FAISS |
+| Serving | FastAPI, Redis, Uvicorn |
+| MLOps | MLflow, GitHub Actions, GHCR, Docker |
+| Observabilité | Prometheus, Grafana |
+| Qualité | Pytest, Ruff, contrats de données, fingerprints SHA-256 |
+
+## Démonstration locale
+
+### 1. Installation
+
+Prérequis : Python 3.11 ou 3.12, Docker Desktop et MovieLens 1M.
 
 ```powershell
+git clone https://github.com/Juven14s/production-recommendation-system.git
+cd production-recommendation-system
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
 pytest
 ```
 
-Placez les fichiers MovieLens dans `data/raw/ml-1m` ou `data/raw/ml-25m`, puis lancez :
+Télécharger [MovieLens 1M](https://files.grouplens.org/datasets/movielens/ml-1m.zip)
+et extraire son contenu dans `data/raw/ml-1m`.
+
+### 2. Reproduire le pipeline
 
 ```powershell
-mle-ingest --input-dir data/raw/ml-1m --output-dir data/processed/ml-1m
-```
-
-La commande détecte automatiquement `ratings.csv`/`movies.csv` ou
-`ratings.dat`/`movies.dat`. Elle écrit :
-
-```text
-data/processed/ml-1m/
-├── ratings.parquet
-├── movies.parquet
-└── quality_report.json
-```
-
-Pour exécuter sans installer le script CLI :
-
-```powershell
-$env:PYTHONPATH = "src"
-python -m mle_recsys.data.ingest `
+mle-ingest `
   --input-dir data/raw/ml-1m `
   --output-dir data/processed/ml-1m
-```
 
-Créez ensuite le split temporel :
-
-```powershell
 mle-split `
   --ratings data/processed/ml-1m/ratings.parquet `
-  --output-dir data/processed/ml-1m/splits `
-  --positive-threshold 4.0
-```
+  --output-dir data/processed/ml-1m/splits
 
-Puis entraînez et évaluez la baseline de popularité :
-
-```powershell
-mle-popularity `
+mle-retrain `
   --split-dir data/processed/ml-1m/splits `
   --movies data/processed/ml-1m/movies.parquet `
-  --output-dir artifacts/baselines/popularity `
-  --k 5 10 20
+  --registry-root artifacts/model_registry `
+  --tracking-uri sqlite:///artifacts/mlflow/mlflow.db
 ```
 
-Entraînez ensuite la baseline collaborative :
+Le pipeline entraîne BPR, construit FAISS, entraîne LightGBM, journalise dans MLflow,
+évalue les gates et promeut automatiquement le candidat s'il est conforme.
+
+### 3. Lancer la plateforme
 
 ```powershell
-mle-item-knn `
-  --split-dir data/processed/ml-1m/splits `
-  --movies data/processed/ml-1m/movies.parquet `
-  --output-dir artifacts/baselines/item-knn `
-  --neighbors-per-item 100 `
-  --shrinkage 10 `
-  --k 5 10 20
+docker compose up --build
 ```
 
-Apprenez les embeddings BPR :
-
-```powershell
-mle-bpr `
-  --split-dir data/processed/ml-1m/splits `
-  --movies data/processed/ml-1m/movies.parquet `
-  --output-dir artifacts/models/bpr `
-  --embedding-dim 64 `
-  --epochs 15 `
-  --batch-size 4096 `
-  --k 5 10 20
-```
-
-Construisez et évaluez l'index FAISS :
-
-```powershell
-mle-faiss `
-  --bpr-dir artifacts/models/bpr `
-  --split-dir data/processed/ml-1m/splits `
-  --movies data/processed/ml-1m/movies.parquet `
-  --output-dir artifacts/retrieval/faiss `
-  --k 50 100 200
-```
-
-Entraînez le ranker sur les candidats FAISS :
-
-```powershell
-mle-ranker `
-  --split-dir data/processed/ml-1m/splits `
-  --movies data/processed/ml-1m/movies.parquet `
-  --bpr-dir artifacts/models/bpr `
-  --validation-candidates artifacts/retrieval/faiss/validation_candidates.parquet `
-  --output-dir artifacts/models/ranker `
-  --candidate-count 200 `
-  --k 5 10 20
-```
-
-Lancez l'API localement :
-
-```powershell
-mle-serve
-```
-
-Puis testez les endpoints :
+| Service | URL locale |
+|---|---|
+| API Swagger | <http://localhost:8000/docs> |
+| Health check | <http://localhost:8000/health> |
+| Métriques brutes | <http://localhost:8000/metrics> |
+| Prometheus | <http://localhost:9090> |
+| Grafana | <http://localhost:3000> |
+| MLflow | <http://localhost:5000> |
 
 ```powershell
 Invoke-RestMethod http://localhost:8000/health
 Invoke-RestMethod "http://localhost:8000/recommendations/1?k=10"
 ```
 
-Avec Docker et Redis :
+Exemple de réponse :
 
-```powershell
-docker compose up --build
+```json
+{
+  "user_id": 1,
+  "k": 5,
+  "model_version": "26498d83e704",
+  "cold_start": false,
+  "cached": false,
+  "recommendations": [
+    {
+      "movie_id": 364,
+      "title": "Lion King, The (1994)",
+      "genres": "Animation|Children's|Musical",
+      "score": 0.91,
+      "rank": 1,
+      "source": "faiss"
+    }
+  ]
+}
 ```
 
-Services exposés par Compose :
+Le score ci-dessus est illustratif ; les identifiants, titres et rangs proviennent du
+smoke test local du bundle champion.
 
-- API et documentation : `http://localhost:8000/docs`
-- métriques Prometheus brutes : `http://localhost:8000/metrics`
-- serveur Prometheus : `http://localhost:9090`
-- dashboard Grafana : `http://localhost:3000` (`admin` / `admin` en local)
-- interface MLflow : `http://localhost:5000`
+## CI/CD et gouvernance
 
-Réentraîner et promouvoir automatiquement si les quality gates passent :
+| Workflow | Déclencheur | Responsabilité |
+|---|---|---|
+| `CI` | push sur `main` / pull request | Ruff, 24 tests, packaging, validation des configurations |
+| `Container` | `main`, tags `v*` | build et publication de l'image de base dans GHCR |
+| `Retrain` | manuel, lundi, tag `retrain-*` | dataset vérifié, entraînement, gates, artefacts |
+| `Promote model image` | manuel, tag `promote-*` | validation, smoke test, staging/production |
+| `Roll back model image` | manuel | restauration d'une image immuable connue |
 
-```powershell
-mle-retrain
+Cycle de livraison appliqué à la V1 :
+
+```text
+retrain tag → quality gates → bundle versionné → staging → validation → production
+                                                           ↘ rollback immuable
 ```
 
-Consulter les runs et le registre MLflow sans Docker :
+Runs de référence :
+
+- [CI initiale réussie](https://github.com/Juven14s/production-recommendation-system/actions/runs/44534921405)
+- [Réentraînement et création du champion](https://github.com/Juven14s/production-recommendation-system/actions/runs/44587207119)
+- [Promotion staging](https://github.com/Juven14s/production-recommendation-system/actions/runs/44588331174)
+- [Promotion production](https://github.com/Juven14s/production-recommendation-system/actions/runs/44589658763)
+
+### Déclencheurs auditables
 
 ```powershell
-mlflow server `
-  --backend-store-uri sqlite:///artifacts/mlflow/mlflow.db `
-  --default-artifact-root artifacts/mlflow/artifacts `
-  --host 127.0.0.1 `
-  --port 5000
+git tag retrain-YYYY-MM-DD
+git push origin retrain-YYYY-MM-DD
+
+git tag promote-staging-<version>
+git push origin promote-staging-<version>
+
+git tag promote-production-<version>
+git push origin promote-production-<version>
 ```
 
-Dans Compose, le profil d'entraînement journalise directement vers le serveur
-MLflow et partage le registre avec l'API :
+L'environnement GitHub `production` peut exiger une approbation avant que le job ne
+reçoive l'autorisation de déplacer le tag d'image `production`.
 
-```powershell
-docker compose --profile training run --rm retrainer
-docker compose restart api
+## Observabilité
+
+L'API expose notamment :
+
+- latence HTTP et latence par étape retrieval/features/ranking ;
+- taux de requêtes, exceptions et réponses vides ;
+- hit/miss/error du cache Redis ;
+- distribution des scores et nombre de candidats ;
+- version active, taille du catalogue et fraîcheur des features.
+
+Prometheus évalue des alertes de latence p95, taux d'erreur, absence de trafic et
+fraîcheur. Grafana provisionne automatiquement le dashboard du service.
+
+## Structure du dépôt
+
+```text
+.
+├── .github/workflows/       # CI, retraining, promotion et rollback
+├── configs/                 # hyperparamètres reproductibles
+├── data/                    # données locales non versionnées
+├── docs/                    # script de démonstration et préparation entretien
+├── observability/           # Prometheus, alertes et dashboard Grafana
+├── src/mle_recsys/
+│   ├── api/                 # FastAPI, cache et métriques
+│   ├── data/                # contrats, ingestion et split temporel
+│   ├── mlops/               # MLflow, registry, gates et validation bundle
+│   ├── models/              # popularité, Item-KNN et BPR
+│   ├── ranking/             # features et LightGBM LambdaRank
+│   └── retrieval/           # index et recherche FAISS
+├── tests/                   # 24 tests unitaires et d'intégration légère
+├── Dockerfile               # image complète entraînement/développement
+├── Dockerfile.release       # image d'inférence sans stack d'entraînement
+└── docker-compose.yml       # plateforme locale complète
 ```
 
-Inspecter le registre ou revenir au champion précédent :
+## Limites et prolongements
 
-```powershell
-mle-registry status
-mle-registry rollback
-```
+Cette V1 démontre le passage de l'expérimentation au service observable. Pour une mise
+à l'échelle réelle, les étapes suivantes seraient :
 
-Valider explicitement un bundle avant déploiement :
+- test de charge distribué et SLO de latence end-to-end ;
+- détection de dérive sur des interactions récentes ;
+- A/B testing et métriques métier online ;
+- feature store partagé online/offline ;
+- stockage distant durable pour MLflow et les artefacts ;
+- déploiement orchestré avec autoscaling.
 
-```powershell
-mle-validate-bundle artifacts/model_registry/bundles/<version>
-```
+## Ce que démontre ce projet
 
-## CI/CD GitHub
-
-- `CI` exécute Ruff, les tests, le build Python et valide les configurations
-  Prometheus/Grafana sur chaque push et pull request.
-- `Container` construit l'image de base et la publie dans GHCR sur `main` ou un tag.
-- `Retrain` s'exécute manuellement ou chaque lundi, vérifie le checksum officiel de
-  MovieLens, restaure les métriques du champion précédent et publie un bundle versionné.
-- `Promote model image` télécharge ce bundle, contrôle ses empreintes et son inférence,
-  puis attend l'approbation du GitHub Environment `staging` ou `production`.
-- `Roll back model image` remet un tag d'environnement sur une image immuable déjà
-  testée, sans réentraîner le modèle.
-
-L'image de release n'embarque pas PyTorch, CUDA ni MLflow : les artefacts BPR sont
-chargés sous forme NumPy et seuls les composants nécessaires à l'inférence sont installés.
-
-Dans les paramètres GitHub, créez les Environments `staging` et `production`, puis
-ajoutez au minimum un reviewer obligatoire sur `production`. Les workflows utilisent
-uniquement `GITHUB_TOKEN` et ne nécessitent donc aucun secret de registre additionnel.
-
-Un réentraînement peut aussi être déclenché de manière auditable en poussant un tag
-préfixé par `retrain-`, par exemple `git tag retrain-2026-11-19` puis `git push origin
-retrain-2026-11-19`.
-
-Une version produite peut être promue avec un tag `promote-staging-<version>` ou
-`promote-production-<version>`. Le workflow retrouve automatiquement l'artefact exact ;
-l'environnement GitHub correspondant applique ensuite ses règles d'approbation.
-
-## Principes retenus
-
-- Les identifiants sont normalisés en `user_id` et `movie_id`.
-- Les timestamps restent des entiers Unix pour préserver la source sans ambiguïté.
-- L'ingestion échoue explicitement si le schéma, les types ou les domaines sont invalides.
-- Les données et artefacts volumineux ne sont pas versionnés dans Git.
-- Les découpages d'entraînement seront temporels afin d'éviter les fuites de données.
-
-## Prochain incrément
-
-Exécuter les workflows sur le dépôt GitHub, mesurer le comportement en charge de
-l'API et ajouter un test de dérive sur des interactions plus récentes.
+Le résultat n'est pas seulement un notebook de recommandation. Il démontre la capacité
+à concevoir un système ML reproductible, testable, observable, déployable et réversible,
+avec une séparation explicite entre entraînement, validation et serving.
