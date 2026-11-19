@@ -238,6 +238,10 @@ Un réentraînement peut aussi être déclenché de manière auditable en poussa
 préfixé par `retrain-`, par exemple `git tag retrain-2026-11-19` puis `git push origin
 retrain-2026-11-19`.
 
+Une version produite peut être promue avec un tag `promote-staging-<version>` ou
+`promote-production-<version>`. Le workflow retrouve automatiquement l'artefact exact ;
+l'environnement GitHub correspondant applique ensuite ses règles d'approbation.
+
 ## Principes retenus
 
 - Les identifiants sont normalisés en `user_id` et `movie_id`.

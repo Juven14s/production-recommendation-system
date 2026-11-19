@@ -17,6 +17,10 @@ on:
         default: staging
         type: choice
         options: [staging, production]
+  push:
+    tags:
+      - "promote-staging-*"
+      - "promote-production-*"
 
 permissions:
   contents: read
@@ -26,9 +30,38 @@ permissions:
 jobs:
   promote:
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || startsWith(github.ref_name, 'promote-production-') && 'production' || 'staging' }}
     steps:
       - uses: actions/checkout@v7
+      - name: Resolve release coordinates
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MANUAL_RUN_ID: ${{ inputs.training_run_id }}
+          MANUAL_VERSION: ${{ inputs.version }}
+          MANUAL_ENVIRONMENT: ${{ inputs.environment }}
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            run_id="$MANUAL_RUN_ID"
+            version="$MANUAL_VERSION"
+            target_environment="$MANUAL_ENVIRONMENT"
+          else
+            version="$GITHUB_REF_NAME"
+            if [[ "$version" == promote-production-* ]]; then
+              version="${version#promote-production-}"
+              target_environment="production"
+            else
+              version="${version#promote-staging-}"
+              target_environment="staging"
+            fi
+            run_id="$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=model-bundle-$version&per_page=10" --jq '[.artifacts[] | select(.expired == false)][0].workflow_run.id')"
+          fi
+          [[ -n "$run_id" && "$run_id" != "null" ]]
+          [[ -n "$version" ]]
+          echo "training_run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "target_environment=$target_environment" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -38,12 +71,12 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.training_run_id }}
-          name: model-bundle-${{ inputs.version }}
+          run-id: ${{ steps.release.outputs.training_run_id }}
+          name: model-bundle-${{ steps.release.outputs.version }}
           path: release_bundle
       - name: Validate approved bundle
         env:
-          EXPECTED_VERSION: ${{ inputs.version }}
+          EXPECTED_VERSION: ${{ steps.release.outputs.version }}
         shell: bash
         run: |
           mle-validate-bundle release_bundle
@@ -58,8 +91,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build, smoke-test and publish
         env:
-          VERSION: ${{ inputs.version }}
-          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+          VERSION: ${{ steps.release.outputs.version }}
+          TARGET_ENVIRONMENT: ${{ steps.release.outputs.target_environment }}
         shell: bash
         run: |
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
