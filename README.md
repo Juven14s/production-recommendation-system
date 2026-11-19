@@ -234,6 +234,10 @@ Dans les paramètres GitHub, créez les Environments `staging` et `production`, 
 ajoutez au minimum un reviewer obligatoire sur `production`. Les workflows utilisent
 uniquement `GITHUB_TOKEN` et ne nécessitent donc aucun secret de registre additionnel.
 
+Un réentraînement peut aussi être déclenché de manière auditable en poussant un tag
+préfixé par `retrain-`, par exemple `git tag retrain-2026-11-19` puis `git push origin
+retrain-2026-11-19`.
+
 ## Principes retenus
 
 - Les identifiants sont normalisés en `user_id` et `movie_id`.

@@ -2,6 +2,8 @@ name: Retrain
 
 on:
   workflow_dispatch:
+  push:
+    tags: ["retrain-*"]
   schedule:
     - cron: "17 3 * * 1"
 
