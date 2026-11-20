@@ -1,6 +1,6 @@
-# Script de démonstration — 5 minutes
+# Script de démonstration : 5 minutes
 
-## 0:00–0:30 — Problème et résultat
+## 0:00–0:30 : Problème et résultat
 
 > J'ai construit un système de recommandation de films en deux étapes, depuis les
 > interactions MovieLens brutes jusqu'à une image de production observable et
@@ -9,7 +9,7 @@
 
 À montrer : le haut du `README.md`, les badges verts et le tableau des résultats.
 
-## 0:30–1:30 — Architecture
+## 0:30–1:30 : Architecture
 
 À montrer : le diagramme Mermaid du README.
 
@@ -22,7 +22,7 @@ Points à expliquer :
    récence et affinité de genres.
 5. Un fallback de popularité traite les utilisateurs inconnus.
 
-## 1:30–2:15 — Résultats et compromis
+## 1:30–2:15 : Résultats et compromis
 
 > Le champion atteint 0,0767 de Recall@10, 0,0365 de NDCG@10, 46,07 % de couverture
 > et 53,31 % de candidate recall@200. Ces valeurs sont modestes en absolu parce que
@@ -37,7 +37,7 @@ Compromis à mentionner :
   donc pas un A/B test.
 - Le retrieval p95 mesuré ne représente pas la latence HTTP end-to-end.
 
-## 2:15–3:15 — Démonstration API
+## 2:15–3:15 : Démonstration API
 
 ```powershell
 docker compose up --build
@@ -53,7 +53,7 @@ Invoke-RestMethod "http://localhost:8000/recommendations/999999?k=5"
 - `cold_start` passe à `true` pour l'utilisateur inconnu ;
 - le second appel identique peut être servi par Redis.
 
-## 3:15–4:15 — MLOps et observabilité
+## 3:15–4:15 : MLOps et observabilité
 
 Ouvrir les runs GitHub Actions de référence depuis le README.
 
@@ -70,7 +70,7 @@ Ouvrir les runs GitHub Actions de référence depuis le README.
 - Grafana : latence, erreurs, cache, scores et fraîcheur des features ;
 - `manifest.json` : version, fingerprints, métriques et résultat des gates.
 
-## 4:15–5:00 — Conclusion
+## 4:15–5:00 : Conclusion
 
 > Ce projet démontre moins un algorithme isolé qu'un cycle de vie ML complet : données
 > validées, évaluation sans fuite, artefacts reproductibles, service observable,
